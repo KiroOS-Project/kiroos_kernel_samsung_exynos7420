@@ -1612,3 +1612,25 @@ void add_hwgenerator_randomness(const char *buffer, size_t count,
 	credit_entropy_bits(poolp, entropy);
 }
 EXPORT_SYMBOL_GPL(add_hwgenerator_randomness);
+
+#include <linux/syscalls.h>
+
+#ifndef GRND_NONBLOCK
+#define GRND_NONBLOCK 0x0001
+#define GRND_RANDOM   0x0002
+#endif
+
+SYSCALL_DEFINE3(getrandom, char __user *, buf, size_t, count,
+		unsigned int, flags)
+{
+	if (flags & ~(GRND_NONBLOCK|GRND_RANDOM))
+		return -EINVAL;
+
+	if (count > INT_MAX)
+		count = INT_MAX;
+
+	if (flags & GRND_RANDOM)
+		return extract_entropy_user(&blocking_pool, buf, count);
+
+	return extract_entropy_user(&nonblocking_pool, buf, count);
+}

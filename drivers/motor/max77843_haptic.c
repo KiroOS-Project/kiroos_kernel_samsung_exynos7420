@@ -154,6 +154,10 @@ static void haptic_enable(struct timed_output_dev *tout_dev, int value)
 		}
 		spin_lock_irqsave(&hap_data->lock, flags);
 		pr_debug("[VIB] %s value %d\n", __func__, value);
+		// KiroOS: Calibrate short tap / keypress to crisp 12ms (10-15ms range)
+		if (value > 0 && value < 30) {
+			value = 12;
+		}
 		value = min(value, (int)hap_data->pdata->max_timeout);
 		hrtimer_start(timer, ns_to_ktime((u64)value * NSEC_PER_MSEC),
 			HRTIMER_MODE_REL);
