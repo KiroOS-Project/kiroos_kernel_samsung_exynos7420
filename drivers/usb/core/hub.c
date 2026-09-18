@@ -116,6 +116,7 @@ EXPORT_SYMBOL_GPL(ehci_cf_port_reset_rwsem);
 #define HUB_DEBOUNCE_STEP	  25
 #define HUB_DEBOUNCE_STABLE	 100
 
+static void hub_release(struct kref *kref);
 static int usb_reset_and_verify_device(struct usb_device *udev);
 
 static inline char *portspeed(struct usb_hub *hub, int portstatus)
@@ -1227,6 +1228,7 @@ static void hub_activate(struct usb_hub *hub, enum hub_activation_type type)
 
 		} else {
 			/* The power session is gone; tell khubd */
+			device_unlock(hub->intfdev);
 			usb_set_device_state(udev, USB_STATE_NOTATTACHED);
 			set_bit(port1, hub->change_bits);
 		}
@@ -1247,6 +1249,11 @@ static void hub_activate(struct usb_hub *hub, enum hub_activation_type type)
 #endif
 		delay = HUB_DEBOUNCE_STABLE;
 
+
+	if (type == HUB_INIT2 || type == HUB_INIT3)
+		device_unlock(hub->intfdev);
+
+	kref_put(&hub->kref, hub_release);
 		/* Don't do a long sleep inside a workqueue routine */
 		if (type == HUB_INIT2) {
 			PREPARE_DELAYED_WORK(&hub->init_work, hub_init_func3);
