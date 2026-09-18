@@ -1131,7 +1131,9 @@ sleep:
 	return 0;
 
 failed_out:
-	pr_warn("%s: failed dynamic hotplug (exe_cmd %d, ret %d)\n", __func__, exe_cmd, ret);
+	/* prev_cmd is not updated, so the command is retried on the next cycle */
+	pr_warn_ratelimited("%s: failed dynamic hotplug (exe_cmd %d, ret %d)\n",
+			__func__, exe_cmd, ret);
 	goto sleep;
 }
 
