@@ -977,6 +977,7 @@ struct journal_s
 	/* Reference to checksum algorithm driver via cryptoapi */
 	struct crypto_shash *j_chksum_driver;
 
+#define JBD2_REC_ERR	0x080	/* The errno in the sb has been recorded */
 	/* Precomputed journal UUID checksum for seeding other checksums */
 	__u32 j_csum_seed;
 };
