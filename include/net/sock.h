@@ -705,6 +705,8 @@ enum sock_flags {
 #endif
 };
 
+#define SK_FLAGS_TIMESTAMP ((1UL << SOCK_TIMESTAMP) | (1UL << SOCK_TIMESTAMPING_RX_SOFTWARE))
+
 static inline void sock_copy_flags(struct sock *nsk, struct sock *osk)
 {
 	nsk->sk_flags = osk->sk_flags;
@@ -911,7 +913,6 @@ void sock_lock_init(struct sock *sk);
 extern struct lock_class_key af_callback_keys[AF_MAX];
 extern char *const af_family_clock_key_strings[AF_MAX+1];
 
-#define SK_FLAGS_TIMESTAMP ((1UL << SOCK_TIMESTAMP) | (1UL << SOCK_TIMESTAMPING_RX_SOFTWARE))
 /* END - needed for MPTCP */
 #endif
 
