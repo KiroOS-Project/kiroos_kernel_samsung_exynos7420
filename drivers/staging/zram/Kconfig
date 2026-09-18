@@ -16,6 +16,16 @@ config ZRAM
 	  See zram.txt for more information.
 	  Project home: <https://compcache.googlecode.com/>
 
+config ZRAM_LZ4_COMPRESS
+	bool "Use LZ4 compression instead of LZO"
+	depends on ZRAM
+	select LZ4_COMPRESS
+	select LZ4_DECOMPRESS
+	default n
+	help
+	  LZ4 compresses and decompresses pages faster than LZO for a
+	  similar ratio, so swapping to zram costs less CPU time.
+
 config ZRAM_DEBUG
 	bool "Compressed RAM block device debug support"
 	depends on ZRAM

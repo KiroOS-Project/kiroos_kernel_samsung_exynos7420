@@ -30,6 +30,41 @@
 #include <linux/highmem.h>
 #include <linux/slab.h>
 #include <linux/lzo.h>
+#include <linux/lz4.h>
+
+/*
+ * Page compression backend: LZ4 when CONFIG_ZRAM_LZ4_COMPRESS is set, otherwise LZO.
+ * Both return 0 (LZO_E_OK) on success.
+ */
+#ifdef CONFIG_ZRAM_LZ4_COMPRESS
+#define ZRAM_COMPRESS_WORKMEM	LZ4_MEM_COMPRESS
+#define ZRAM_COMPRESSOR		"lz4"
+static inline int zram_compress(const unsigned char *src, unsigned char *dst,
+				size_t *dst_len, void *wrkmem)
+{
+	return lz4_compress(src, PAGE_SIZE, dst, dst_len, wrkmem);
+}
+
+static inline int zram_decompress(const unsigned char *src, size_t src_len,
+				  unsigned char *dst, size_t *dst_len)
+{
+	return lz4_decompress_unknownoutputsize(src, src_len, dst, dst_len);
+}
+#else
+#define ZRAM_COMPRESS_WORKMEM	LZO1X_MEM_COMPRESS
+#define ZRAM_COMPRESSOR		"lzo"
+static inline int zram_compress(const unsigned char *src, unsigned char *dst,
+				size_t *dst_len, void *wrkmem)
+{
+	return lzo1x_1_compress(src, PAGE_SIZE, dst, dst_len, wrkmem);
+}
+
+static inline int zram_decompress(const unsigned char *src, size_t src_len,
+				  unsigned char *dst, size_t *dst_len)
+{
+	return lzo1x_decompress_safe(src, src_len, dst, dst_len);
+}
+#endif
 #include <linux/string.h>
 #include <linux/vmalloc.h>
 
@@ -162,7 +197,7 @@ static int zram_decompress_page(struct zram *zram, char *mem, u32 index)
 	if (meta->table[index].size == PAGE_SIZE)
 		memcpy(mem, cmem, PAGE_SIZE);
 	else
-		ret = lzo1x_decompress_safe(cmem, meta->table[index].size,
+		ret = zram_decompress(cmem, meta->table[index].size,
 						mem, &clen);
 	zs_unmap_object(meta->mem_pool, handle);
 
@@ -278,8 +313,7 @@ static int zram_bvec_write(struct zram *zram, struct bio_vec *bvec, u32 index,
 		goto out;
 	}
 
-	ret = lzo1x_1_compress(uncmem, PAGE_SIZE, src, &clen,
-			       meta->compress_workmem);
+	ret = zram_compress(uncmem, src, &clen, meta->compress_workmem);
 
 	if (!is_partial_io(bvec)) {
 		kunmap_atomic(user_mem);
@@ -517,7 +551,7 @@ struct zram_meta *zram_meta_alloc(u64 disksize)
 	if (!meta)
 		goto out;
 
-	meta->compress_workmem = kzalloc(LZO1X_MEM_COMPRESS, GFP_KERNEL);
+	meta->compress_workmem = kzalloc(ZRAM_COMPRESS_WORKMEM, GFP_KERNEL);
 	if (!meta->compress_workmem)
 		goto free_meta;
 
@@ -715,7 +749,7 @@ static int __init zram_init(void)
 			goto free_devices;
 	}
 
-	pr_info("Created %u device(s) ...\n", num_devices);
+	pr_info("Created %u device(s) (" ZRAM_COMPRESSOR " compression) ...\n", num_devices);
 
 	return 0;
 
