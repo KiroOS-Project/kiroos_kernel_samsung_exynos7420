@@ -1529,7 +1529,7 @@ static int __mkroute_input(struct sk_buff *skb,
 
 	do_cache = res->fi && !itag;
 	if (out_dev == in_dev && err && IN_DEV_TX_REDIRECTS(out_dev) &&
-	     skb->protocol == htons(ETH_P_IP) &&
+	    skb->protocol == htons(ETH_P_IP) &&
 	    (IN_DEV_SHARED_MEDIA(out_dev) ||
 	     inet_addr_onlink(out_dev, saddr, FIB_RES_GW(*res))))
 		IPCB(skb)->flags |= IPSKB_DOREDIRECT;
@@ -2274,8 +2274,6 @@ static int rt_fill_info(struct net *net,  __be32 dst, __be32 src,
 	r->rtm_src_len	= 0;
 	r->rtm_tos	= fl4->flowi4_tos;
 	r->rtm_table	= RT_TABLE_MAIN;
-	if (IPCB(skb)->flags & IPSKB_DOREDIRECT)
-		r->rtm_flags |= RTCF_DOREDIRECT;
 	if (nla_put_u32(skb, RTA_TABLE, RT_TABLE_MAIN))
 		goto nla_put_failure;
 	r->rtm_type	= rt->rt_type;
