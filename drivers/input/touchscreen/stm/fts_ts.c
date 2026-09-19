@@ -1275,6 +1275,12 @@ static unsigned char fts_event_handler_type_b(struct fts_ts_info *info,
 				dev_info(&info->client->dev, "%s: SPAY[%X]\n", __func__, string_data[1]);
 				input_report_key(info->input_dev, KEY_BLACK_UI_GESTURE, 1);
 				info->scrub_id = (string_data[1] >> 2) & 0xF;
+				/* KiroOS: swipe up from the bottom wakes the screen.
+				 * Hold the system up until the input stack has the key. */
+				pm_wakeup_event(info->input_dev->dev.parent, 1000);
+				input_report_key(info->input_dev, KEY_WAKEUP, 1);
+				input_sync(info->input_dev);
+				input_report_key(info->input_dev, KEY_WAKEUP, 0);
 				break;
 			default:
 				tsp_debug_info(true, &info->client->dev, "%s: no event:%X\n", __func__, string_data[1]);
@@ -1944,6 +1950,7 @@ static int fts_probe(struct i2c_client *client, const struct i2c_device_id *idp)
 #endif
 #ifdef FTS_SUPPORT_STRINGLIB
 	set_bit(KEY_BLACK_UI_GESTURE, info->input_dev->keybit);
+	set_bit(KEY_WAKEUP, info->input_dev->keybit);
 #endif
 #ifdef FTS_SUPPORT_TOUCH_KEY
 	if (info->board->support_mskey) {
