@@ -352,8 +352,16 @@ struct page *read_swap_cache_async(swp_entry_t entry, gfp_t gfp_mask,
 			 * busy looping, we just conditionally invoke the
 			 * scheduler here, if there are some more important
 			 * tasks to run.
+			 *
+			 * cond_resched() is not enough when we run at a
+			 * higher priority (e.g. an RT thread) than the task
+			 * that holds SWAP_HAS_CACHE on the same CPU: that task
+			 * never gets to run and we spin until the soft lockup
+			 * watchdog panics. Sleep for a tick instead (upstream
+			 * 029c4628b2eb "mm: swap: get rid of livelock in
+			 * swapin readahead").
 			 */
-			cond_resched();
+			schedule_timeout_uninterruptible(1);
 			continue;
 		}
 		if (err) {		/* swp entry is obsolete ? */
