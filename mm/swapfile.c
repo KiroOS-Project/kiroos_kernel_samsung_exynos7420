@@ -2353,6 +2353,32 @@ int swapcache_prepare(swp_entry_t entry)
 	return __swap_duplicate(entry, SWAP_HAS_CACHE);
 }
 
+/*
+ * @entry: swap entry still mapped by a pte (caller holds the pte lock).
+ *
+ * Returns 1 if the entry names no live swap slot: bad type, offset past the
+ * end of the device, or a slot nobody holds a reference to. Such a pte is
+ * corrupt, and retrying the swapin can never succeed.
+ */
+int swp_entry_invalid(swp_entry_t entry)
+{
+	struct swap_info_struct *p;
+	unsigned long offset, type;
+	int bad;
+
+	type = swp_type(entry);
+	if (type >= nr_swapfiles)
+		return 1;
+	p = swap_info[type];
+	offset = swp_offset(entry);
+
+	spin_lock(&p->lock);
+	bad = !(p->flags & SWP_USED) || !p->swap_map || offset >= p->max ||
+	      !swap_count(p->swap_map[offset]);
+	spin_unlock(&p->lock);
+	return bad;
+}
+
 struct swap_info_struct *page_swap_info(struct page *page)
 {
 	swp_entry_t swap = { .val = page_private(page) };

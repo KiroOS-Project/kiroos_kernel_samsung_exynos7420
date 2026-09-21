@@ -3041,8 +3041,19 @@ static int do_swap_page(struct mm_struct *mm, struct vm_area_struct *vma,
 			 * while we released the pte lock.
 			 */
 			page_table = pte_offset_map_lock(mm, pmd, address, &ptl);
-			if (likely(pte_same(*page_table, orig_pte)))
-				ret = VM_FAULT_OOM;
+			if (likely(pte_same(*page_table, orig_pte))) {
+				/*
+				 * A pte naming a swap slot that does not exist
+				 * is not an OOM: VM_FAULT_OOM would make the
+				 * task refault forever (app hangs, OOM killer
+				 * spree, soft lockup panic). Kill the task.
+				 */
+				if (unlikely(swp_entry_invalid(entry))) {
+					print_bad_pte(vma, address, orig_pte, NULL);
+					ret = VM_FAULT_SIGBUS;
+				} else
+					ret = VM_FAULT_OOM;
+			}
 			delayacct_clear_flag(DELAYACCT_PF_SWAPIN);
 			goto unlock;
 		}
