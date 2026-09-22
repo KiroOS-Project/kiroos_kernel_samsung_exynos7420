@@ -186,20 +186,26 @@ static int zram_decompress_page(struct zram *zram, char *mem, u32 index)
 	size_t clen = PAGE_SIZE;
 	unsigned char *cmem;
 	struct zram_meta *meta = zram->meta;
-	unsigned long handle = meta->table[index].handle;
+	unsigned long handle;
+	u16 size;
+
+	read_lock(&zram->tb_lock);
+	handle = meta->table[index].handle;
+	size = meta->table[index].size;
 
 	if (!handle || zram_test_flag(meta, index, ZRAM_ZERO)) {
+		read_unlock(&zram->tb_lock);
 		memset(mem, 0, PAGE_SIZE);
 		return 0;
 	}
 
 	cmem = zs_map_object(meta->mem_pool, handle, ZS_MM_RO);
-	if (meta->table[index].size == PAGE_SIZE)
+	if (size == PAGE_SIZE)
 		memcpy(mem, cmem, PAGE_SIZE);
 	else
-		ret = zram_decompress(cmem, meta->table[index].size,
-						mem, &clen);
+		ret = zram_decompress(cmem, size, mem, &clen);
 	zs_unmap_object(meta->mem_pool, handle);
+	read_unlock(&zram->tb_lock);
 
 	/* Should NEVER happen. Return bio error if it does. */
 	if (unlikely(ret != LZO_E_OK)) {
@@ -220,11 +226,14 @@ static int zram_bvec_read(struct zram *zram, struct bio_vec *bvec,
 	struct zram_meta *meta = zram->meta;
 	page = bvec->bv_page;
 
+	read_lock(&zram->tb_lock);
 	if (unlikely(!meta->table[index].handle) ||
 			zram_test_flag(meta, index, ZRAM_ZERO)) {
+		read_unlock(&zram->tb_lock);
 		handle_zero_page(bvec);
 		return 0;
 	}
+	read_unlock(&zram->tb_lock);
 
 	if (is_partial_io(bvec))
 		/* Use  a temporary buffer to decompress the page */
@@ -267,6 +276,7 @@ static int zram_bvec_write(struct zram *zram, struct bio_vec *bvec, u32 index,
 	struct page *page;
 	unsigned char *user_mem, *cmem, *src, *uncmem = NULL;
 	struct zram_meta *meta = zram->meta;
+	bool incompressible = false;
 
 	page = bvec->bv_page;
 	src = meta->compress_buffer;
@@ -286,14 +296,6 @@ static int zram_bvec_write(struct zram *zram, struct bio_vec *bvec, u32 index,
 			goto out;
 	}
 
-	/*
-	 * System overwrites unused sectors. Free memory associated
-	 * with this sector now.
-	 */
-	if (meta->table[index].handle ||
-	    zram_test_flag(meta, index, ZRAM_ZERO))
-		zram_free_page(zram, index);
-
 	user_mem = kmap_atomic(page);
 
 	if (is_partial_io(bvec)) {
@@ -306,9 +308,14 @@ static int zram_bvec_write(struct zram *zram, struct bio_vec *bvec, u32 index,
 	}
 
 	if (page_zero_filled(uncmem)) {
-		kunmap_atomic(user_mem);
+		if (user_mem)
+			kunmap_atomic(user_mem);
+		/* Free memory associated with this sector now. */
+		write_lock(&zram->tb_lock);
+		zram_free_page(zram, index);
 		zram->stats.pages_zero++;
 		zram_set_flag(meta, index, ZRAM_ZERO);
+		write_unlock(&zram->tb_lock);
 		ret = 0;
 		goto out;
 	}
@@ -327,7 +334,7 @@ static int zram_bvec_write(struct zram *zram, struct bio_vec *bvec, u32 index,
 	}
 
 	if (unlikely(clen > max_zpage_size)) {
-		zram->stats.bad_compress++;
+		incompressible = true;
 		clen = PAGE_SIZE;
 		src = NULL;
 		if (is_partial_io(bvec))
@@ -351,14 +358,25 @@ static int zram_bvec_write(struct zram *zram, struct bio_vec *bvec, u32 index,
 
 	zs_unmap_object(meta->mem_pool, handle);
 
+	/*
+	 * Free memory associated with this sector now, then publish the new
+	 * object, both under tb_lock so readers and free notifications
+	 * never see a stale handle.
+	 */
+	write_lock(&zram->tb_lock);
+	zram_free_page(zram, index);
+
 	meta->table[index].handle = handle;
 	meta->table[index].size = clen;
 
 	/* Update stats */
 	zram_stat64_add(zram, &zram->stats.compr_size, clen);
 	zram->stats.pages_stored++;
+	if (incompressible)
+		zram->stats.bad_compress++;
 	if (clen <= PAGE_SIZE / 2)
 		zram->stats.good_compress++;
+	write_unlock(&zram->tb_lock);
 
 out:
 	if (is_partial_io(bvec))
@@ -375,9 +393,8 @@ static int zram_bvec_rw(struct zram *zram, struct bio_vec *bvec, u32 index,
 	int ret;
 
 	if (rw == READ) {
-		down_read(&zram->lock);
+		/* tb_lock alone keeps the table entry valid while reading */
 		ret = zram_bvec_read(zram, bvec, index, offset, bio);
-		up_read(&zram->lock);
 	} else {
 		down_write(&zram->lock);
 		ret = zram_bvec_write(zram, bvec, index, offset);
@@ -621,9 +638,14 @@ static void zram_slot_free_notify(struct block_device *bdev,
 	struct zram *zram;
 
 	zram = bdev->bd_disk->private_data;
-	down_write(&zram->lock);
+	/*
+	 * Called with the swap_info spinlock held: sleeping here on the
+	 * zram->lock rwsem (as before) meant "scheduling while atomic" and
+	 * a soft lockup panic of every CPU spinning on that swap lock.
+	 */
+	write_lock(&zram->tb_lock);
 	zram_free_page(zram, index);
-	up_write(&zram->lock);
+	write_unlock(&zram->tb_lock);
 	zram_stat64_inc(zram, &zram->stats.notify_free);
 }
 
@@ -637,6 +659,7 @@ static int create_device(struct zram *zram, int device_id)
 	int ret = -ENOMEM;
 
 	init_rwsem(&zram->lock);
+	rwlock_init(&zram->tb_lock);
 	init_rwsem(&zram->init_lock);
 	spin_lock_init(&zram->stat64_lock);
 

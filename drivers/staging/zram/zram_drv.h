@@ -92,9 +92,14 @@ struct zram_meta {
 struct zram {
 	struct zram_meta *meta;
 	spinlock_t stat64_lock;	/* protect 64-bit stats */
-	struct rw_semaphore lock; /* protect compression buffers, table,
-				   * 32bit stat counters against concurrent
-				   * notifications, reads and writes */
+	struct rw_semaphore lock; /* serialize writers on the compression
+				   * buffers (may sleep) */
+	/*
+	 * Protect table entries and the 32bit stat counters against
+	 * concurrent notifications, reads and writes. It must not sleep:
+	 * swap_slot_free_notify runs under the swap_info spinlock.
+	 */
+	rwlock_t tb_lock;
 	struct request_queue *queue;
 	struct gendisk *disk;
 	int init_done;
