@@ -233,6 +233,10 @@ struct sec_battery_info {
 	int test_mode;
 	bool factory_mode;
 	bool store_mode;
+	/* KiroOS: 0 normal, 1 hold between 77% and 80%, 2 bypass (the charger powers the
+	 * phone, the battery is not charged); the cable and USB stay connected */
+	int kiro_charge;
+	bool kiro_holding;
 	bool ignore_store_mode;
 	bool slate_mode;
 
@@ -363,6 +367,7 @@ enum {
 	HV_WC_CHARGER_SUPPORT,
 	FACTORY_MODE,
 	STORE_MODE,
+	BATT_KIRO_CHARGE,
 	UPDATE,
 	TEST_MODE,
 

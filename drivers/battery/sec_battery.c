@@ -76,6 +76,7 @@ static struct device_attribute sec_battery_attrs[] = {
 	SEC_BATTERY_ATTR(hv_wc_charger_support),
 	SEC_BATTERY_ATTR(factory_mode),
 	SEC_BATTERY_ATTR(store_mode),
+	SEC_BATTERY_ATTR(batt_kiro_charge),
 	SEC_BATTERY_ATTR(update),
 	SEC_BATTERY_ATTR(test_mode),
 
@@ -3441,6 +3442,34 @@ continue_monitor:
 			"%s: battery->stability_test(%d), battery->eng_not_full_status(%d)\n",
 			__func__, battery->stability_test, battery->eng_not_full_status);
 #endif
+	/* KiroOS charge limit / bypass: charging off, the input (and USB) stays on */
+	if (!battery->store_mode && !lpcharge) {
+		bool plugged = battery->cable_type != POWER_SUPPLY_TYPE_BATTERY;
+		bool hold = battery->kiro_holding;
+
+		if (!plugged || battery->kiro_charge == 0)
+			hold = false;
+		else if (battery->kiro_charge == 2)
+			hold = battery->capacity > 20;	/* bypass, unless the battery is low */
+		else if (battery->capacity >= 80)
+			hold = true;
+		else if (battery->capacity <= 77)
+			hold = false;
+
+		if (hold && battery->status == POWER_SUPPLY_STATUS_CHARGING) {
+			sec_bat_set_charging_status(battery, POWER_SUPPLY_STATUS_DISCHARGING);
+			sec_bat_set_charge(battery, false);
+		} else if (!hold && battery->kiro_holding && plugged &&
+				battery->status == POWER_SUPPLY_STATUS_DISCHARGING) {
+			sec_bat_set_charging_status(battery, POWER_SUPPLY_STATUS_CHARGING);
+			sec_bat_set_charge(battery, true);
+		}
+		if (hold != battery->kiro_holding)
+			dev_info(battery->dev, "%s: kiro charge %d, %s at %d%%\n", __func__,
+				battery->kiro_charge, hold ? "holding" : "charging", battery->capacity);
+		battery->kiro_holding = hold;
+	}
+
 	if (battery->store_mode && !lpcharge && (battery->cable_type != POWER_SUPPLY_TYPE_BATTERY)) {
 
 		dev_info(battery->dev,
@@ -4006,6 +4035,10 @@ ssize_t sec_bat_show_attrs(struct device *dev,
 	case STORE_MODE:
 		i += scnprintf(buf + i, PAGE_SIZE - i, "%d\n",
 			battery->store_mode);
+		break;
+	case BATT_KIRO_CHARGE:
+		i += scnprintf(buf + i, PAGE_SIZE - i, "%d\n",
+			battery->kiro_charge);
 		break;
 	case UPDATE:
 		break;
@@ -4750,6 +4783,16 @@ ssize_t sec_bat_store_attrs(
 	case FACTORY_MODE:
 		if (sscanf(buf, "%d\n", &x) == 1) {
 			battery->factory_mode = x ? true : false;
+			ret = count;
+		}
+		break;
+	case BATT_KIRO_CHARGE:
+		if (sscanf(buf, "%d\n", &x) == 1 && x >= 0 && x <= 2) {
+			battery->kiro_charge = x;
+			/* the monitor applies it now */
+			wake_lock(&battery->monitor_wake_lock);
+			queue_delayed_work_on(0, battery->monitor_wqueue,
+					&battery->monitor_work, 0);
 			ret = count;
 		}
 		break;
@@ -7654,6 +7697,8 @@ static int __devinit sec_battery_probe(struct platform_device *pdev)
 	battery->test_mode = 0;
 	battery->factory_mode = false;
 	battery->store_mode = false;
+	battery->kiro_charge = 0;
+	battery->kiro_holding = false;
 	battery->ignore_store_mode = false;
 	battery->slate_mode = false;
 	slate_mode_state = battery->slate_mode;
