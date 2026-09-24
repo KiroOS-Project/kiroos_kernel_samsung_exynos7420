@@ -617,6 +617,15 @@ void pm_qos_update_request_timeout(struct pm_qos_request *req, s32 new_value,
 
 	if (delayed_work_pending(&req->work))
 		cancel_delayed_work_sync(&req->work);
+
+	/*
+	 * Apply the temporary value now; the work restores the default when it
+	 * expires. (The 3.10.72 stable patch landed on this function by fuzz and
+	 * dropped this call, so no timed boost - boot, GPU MIF/INT, CPU - ever
+	 * took effect.)
+	 */
+	__pm_qos_update_request(req, new_value);
+
 	schedule_delayed_work(&req->work, usecs_to_jiffies(timeout_us));
 }
 
