@@ -688,6 +688,9 @@ static int max77843_calc_wc_current(struct max77843_charger_data *charger, int i
 	}//is_charging
 	return input_current;
 }
+/* KiroOS slow charging from 80%, in mA (0: none), set by sec_battery */
+extern int kiro_charge_limit_ma;
+
 static void max77843_set_current(struct max77843_charger_data *charger)
 {
 	int current_now = charger->charging_current,
@@ -727,6 +730,12 @@ static void max77843_set_current(struct max77843_charger_data *charger)
 	if(charger->batt_cable_type == POWER_SUPPLY_TYPE_WIRELESS) {
 		current_max = max77843_calc_wc_current(charger, charger->charging_current_max);
 	}
+
+	/* KiroOS: from 80% the battery charges slowly (sec_battery sets the limit) */
+	if (charger->is_charging && kiro_charge_limit_ma > 0 &&
+	    is_not_wireless_type(charger->batt_cable_type) &&
+	    current_now > kiro_charge_limit_ma)
+		current_now = kiro_charge_limit_ma;
 
 	pr_info("%s: siop_level=%d, afc_detec=%d, vbus_ch=%d, current_max=%d, current_now=%d\n",
 		__func__, charger->siop_level, charger->afc_detect, charger->vbus_changing, current_max, current_now);

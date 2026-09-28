@@ -3275,6 +3275,11 @@ static void sec_bat_misc_event_work(struct work_struct *work)
 	queue_delayed_work_on(0, battery->monitor_wqueue, &battery->monitor_work, 0);
 }
 
+/* KiroOS slow charging from 80% (read by the chargers): 0 = no limit */
+#define KIRO_SLOW_CHARGE_80_MA	900
+#define KIRO_SLOW_CHARGE_90_MA	600
+int kiro_charge_limit_ma;
+
 static void sec_bat_monitor_work(
 				struct work_struct *work)
 {
@@ -3468,6 +3473,33 @@ continue_monitor:
 			dev_info(battery->dev, "%s: kiro charge %d, %s at %d%%\n", __func__,
 				battery->kiro_charge, hold ? "holding" : "charging", battery->capacity);
 		battery->kiro_holding = hold;
+	}
+
+	/*
+	 * KiroOS: from 80% the battery takes it slowly, like today's phones: less heat and
+	 * less wear where lithium cells suffer most (high voltage). Wired charging only; the
+	 * chargers apply the limit each time they set the current.
+	 */
+	if (!battery->store_mode) {
+		int limit = 0;
+
+		if (is_wired_type(battery->cable_type) && battery->kiro_charge == 0) {
+			if (battery->capacity >= 90)
+				limit = KIRO_SLOW_CHARGE_90_MA;
+			else if (battery->capacity >= 80)
+				limit = KIRO_SLOW_CHARGE_80_MA;
+		}
+		if (limit != kiro_charge_limit_ma) {
+			union power_supply_propval v;
+
+			kiro_charge_limit_ma = limit;
+			dev_info(battery->dev, "%s: kiro slow charge %d mA at %d%%\n",
+				__func__, limit, battery->capacity);
+			/* the charger sets its current again, with the limit */
+			v.intval = battery->siop_level;
+			psy_do_property(battery->pdata->charger_name, set,
+				POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN, v);
+		}
 	}
 
 	if (battery->store_mode && !lpcharge && (battery->cable_type != POWER_SUPPLY_TYPE_BATTERY)) {
