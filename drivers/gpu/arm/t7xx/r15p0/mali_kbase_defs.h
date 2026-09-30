@@ -198,6 +198,8 @@
 #define KBASE_KATOM_FLAG_PROTECTED (1<<11)
 /* Atom has been stored in runnable_tree */
 #define KBASE_KATOM_FLAG_JSCTX_IN_TREE (1<<12)
+/* KiroOS: compute atom already soft-stopped this run to hand the slot to another context */
+#define KBASE_KATOM_FLAG_KIRO_SLICED (1<<13)
 
 /* SW related flags about types of JS_COMMAND action
  * NOTE: These must be masked off by JS_COMMAND_MASK */

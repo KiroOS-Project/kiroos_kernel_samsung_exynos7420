@@ -1698,12 +1698,34 @@ bool kbase_backend_soft_hard_stop_slot(struct kbase_device *kbdev,
 									!= 0) {
 						/* idx1 removed successfully,
 						 * will be handled in IRQ */
+						if (!katom_idx1_valid &&
+							(action & JS_COMMAND_MASK) ==
+							JS_COMMAND_SOFT_STOP &&
+							katom_idx1->kctx !=
+							katom_idx0->kctx &&
+							!(katom_idx1->core_req &
+							BASE_JD_REQ_PERMON)) {
+							/* KiroOS: another
+							 * context's atom keeps
+							 * its place and starts
+							 * as soon as idx0 has
+							 * left the slot. Sent
+							 * back to the scheduler
+							 * it was pulled again
+							 * after the stopped atom
+							 * every time, so a time
+							 * slice never handed the
+							 * GPU over. */
+							katom_idx1->gpu_rb_state =
+							KBASE_ATOM_GPU_RB_READY;
+						} else {
 						kbase_job_evicted(katom_idx1);
 						kbase_gpu_remove_atom(kbdev,
 								katom_idx1,
 								action, true);
 						stop_x_dep_idx1 =
 					should_stop_x_dep_slot(katom_idx1);
+						}
 
 						/* stop idx0 if still on GPU */
 						kbase_gpu_stop_atom(kbdev, js,

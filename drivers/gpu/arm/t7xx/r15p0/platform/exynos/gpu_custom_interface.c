@@ -756,6 +756,52 @@ static ssize_t set_highspeed_clock(struct device *dev, struct device_attribute *
 	return count;
 }
 
+/*
+ * KiroOS: the highest clock the normal DVFS may use. The device tree sets 700 MHz and 772 MHz
+ * was only reached through the hardware counter boost, which skips compute loads (OpenCL):
+ * kiroos_perf.sh raises it in the Extreme profile. Thermal Guardian still caps the clock with
+ * dvfs_max_lock.
+ */
+static ssize_t show_kiro_max_clock_limit(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct exynos_context *platform = (struct exynos_context *)pkbdev->platform_context;
+
+	if (!platform)
+		return -ENODEV;
+
+	return snprintf(buf, PAGE_SIZE, "%d\n", (int)platform->gpu_max_clock_limit);
+}
+
+static ssize_t set_kiro_max_clock_limit(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
+{
+	unsigned long flags;
+	int clock = -1;
+	int level;
+	struct exynos_context *platform = (struct exynos_context *)pkbdev->platform_context;
+
+	if (!platform)
+		return -ENODEV;
+
+	if (kstrtoint(buf, 0, &clock))
+		return -EINVAL;
+
+	level = gpu_dvfs_get_level(clock);
+	if ((level < gpu_dvfs_get_level(platform->gpu_max_clock)) ||
+			(level > gpu_dvfs_get_level(platform->gpu_min_clock)) ||
+			(platform->table[level].clock != clock)) {
+		GPU_LOG(DVFS_WARNING, DUMMY, 0u, 0u, "%s: invalid clock value (%d)\n", __func__, clock);
+		return -EINVAL;
+	}
+
+	spin_lock_irqsave(&platform->gpu_dvfs_spinlock, flags);
+	platform->gpu_max_clock_limit = clock;
+	if (platform->interactive.highspeed_clock > clock)
+		platform->interactive.highspeed_clock = clock;
+	spin_unlock_irqrestore(&platform->gpu_dvfs_spinlock, flags);
+
+	return count;
+}
+
 static ssize_t show_highspeed_load(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	ssize_t ret = 0;
@@ -1477,6 +1523,7 @@ DEVICE_ATTR(dvfs_max_lock, S_IRUGO|S_IWUSR, show_max_lock_dvfs, set_max_lock_dvf
 DEVICE_ATTR(dvfs_min_lock, S_IRUGO|S_IWUSR, show_min_lock_dvfs, set_min_lock_dvfs);
 DEVICE_ATTR(down_staycount, S_IRUGO|S_IWUSR, show_down_staycount, set_down_staycount);
 DEVICE_ATTR(highspeed_clock, S_IRUGO|S_IWUSR, show_highspeed_clock, set_highspeed_clock);
+DEVICE_ATTR(kiro_max_clock_limit, S_IRUGO|S_IWUSR, show_kiro_max_clock_limit, set_kiro_max_clock_limit);
 DEVICE_ATTR(highspeed_load, S_IRUGO|S_IWUSR, show_highspeed_load, set_highspeed_load);
 DEVICE_ATTR(highspeed_delay, S_IRUGO|S_IWUSR, show_highspeed_delay, set_highspeed_delay);
 DEVICE_ATTR(wakeup_lock, S_IRUGO|S_IWUSR, show_wakeup_lock, set_wakeup_lock);
@@ -1583,6 +1630,11 @@ int gpu_create_sysfs_file(struct device *dev)
 
 	if (device_create_file(dev, &dev_attr_highspeed_clock)) {
 		GPU_LOG(DVFS_ERROR, DUMMY, 0u, 0u, "couldn't create sysfs file [highspeed_clock]\n");
+		goto out;
+	}
+
+	if (device_create_file(dev, &dev_attr_kiro_max_clock_limit)) {
+		GPU_LOG(DVFS_ERROR, DUMMY, 0u, 0u, "couldn't create sysfs file [kiro_max_clock_limit]\n");
 		goto out;
 	}
 
@@ -1700,6 +1752,7 @@ void gpu_remove_sysfs_file(struct device *dev)
 	device_remove_file(dev, &dev_attr_dvfs_min_lock);
 	device_remove_file(dev, &dev_attr_down_staycount);
 	device_remove_file(dev, &dev_attr_highspeed_clock);
+	device_remove_file(dev, &dev_attr_kiro_max_clock_limit);
 	device_remove_file(dev, &dev_attr_highspeed_load);
 	device_remove_file(dev, &dev_attr_highspeed_delay);
 	device_remove_file(dev, &dev_attr_wakeup_lock);

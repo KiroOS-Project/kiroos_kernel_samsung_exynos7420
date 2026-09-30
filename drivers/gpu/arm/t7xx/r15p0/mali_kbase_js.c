@@ -2255,6 +2255,7 @@ struct kbase_jd_atom *kbase_js_pull(struct kbase_context *kctx, int js)
 	katom->atom_flags |= KBASE_KATOM_FLAG_HOLDING_CTX_REF;
 
 	katom->ticks = 0;
+	katom->atom_flags &= ~KBASE_KATOM_FLAG_KIRO_SLICED;
 
 	return katom;
 }

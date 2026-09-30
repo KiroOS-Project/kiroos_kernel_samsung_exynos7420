@@ -87,6 +87,40 @@ static inline bool timer_callback_should_run(struct kbase_device *kbdev)
 	}
 }
 
+/*
+ * KiroOS time slice for compute. The Mali only starts another context's atom
+ * when the running one leaves the slot, and the stock slice (300 ms) let an
+ * OpenCL kernel hold the GPU while the UI waited behind it: during a GPU
+ * benchmark (and after it was stopped, while its last kernels finished) the
+ * whole phone drew a few frames per second. A compute atom that has run for
+ * KIRO_JS_SLICE_TICKS is soft-stopped as soon as another context waits for
+ * its slot; it resumes where it stopped. Alone it keeps the stock timeouts,
+ * so a compute app on its own runs at full speed.
+ */
+#define KIRO_JS_SLICE_TICKS 1
+
+/* Another context wants this slot: its atom waits in NEXT behind the running
+ * one, or its context is queued for the slot while both entries are taken. */
+static bool kiro_other_ctx_waiting(struct kbase_device *kbdev, int s,
+					struct kbase_jd_atom *atom)
+{
+	struct kbase_jd_atom *next = kbase_gpu_inspect(kbdev, s, 1);
+	struct kbase_context *kctx;
+
+	lockdep_assert_held(&kbdev->hwaccess_lock);
+
+	if (next && next->kctx != atom->kctx)
+		return true;
+
+	list_for_each_entry(kctx, &kbdev->js_data.ctx_list_pullable[s],
+				jctx.sched_info.ctx.ctx_list_entry[s]) {
+		if (kctx != atom->kctx)
+			return true;
+	}
+
+	return false;
+}
+
 static enum hrtimer_restart timer_callback(struct hrtimer *timer)
 {
 	unsigned long flags;
@@ -147,6 +181,30 @@ static enum hrtimer_restart timer_callback(struct hrtimer *timer)
 				if (backend->timeouts_updated &&
 						ticks > soft_stop_ticks)
 					ticks = atom->ticks = soft_stop_ticks;
+
+#if !KBASE_DISABLE_SCHEDULING_SOFT_STOPS
+				/* KiroOS: hand the slot over (see above) */
+				if ((atom->core_req & BASE_JD_REQ_ONLY_COMPUTE) &&
+						!(atom->atom_flags &
+						KBASE_KATOM_FLAG_KIRO_SLICED) &&
+						ticks >= KIRO_JS_SLICE_TICKS &&
+						ticks < soft_stop_ticks &&
+						kiro_other_ctx_waiting(kbdev, s,
+									atom)) {
+					u32 softstop_flags = 0u;
+
+					if (js_devdata->nr_user_contexts_running
+			>= KBASE_DISJOINT_STATE_INTERLEAVED_CONTEXT_COUNT_THRESHOLD)
+						softstop_flags |=
+						JS_COMMAND_SW_CAUSES_DISJOINT;
+
+					atom->atom_flags |=
+						KBASE_KATOM_FLAG_KIRO_SLICED;
+					kbase_job_slot_softstop_swflags(kbdev,
+						s, atom, softstop_flags);
+					continue;
+				}
+#endif
 
 				/* Job is Soft-Stoppable */
 				if (ticks == soft_stop_ticks) {
