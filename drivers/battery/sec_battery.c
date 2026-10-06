@@ -77,6 +77,7 @@ static struct device_attribute sec_battery_attrs[] = {
 	SEC_BATTERY_ATTR(factory_mode),
 	SEC_BATTERY_ATTR(store_mode),
 	SEC_BATTERY_ATTR(batt_kiro_charge),
+	SEC_BATTERY_ATTR(batt_kiro_cap),
 	SEC_BATTERY_ATTR(update),
 	SEC_BATTERY_ATTR(test_mode),
 
@@ -3275,6 +3276,18 @@ static void sec_bat_misc_event_work(struct work_struct *work)
 	queue_delayed_work_on(0, battery->monitor_wqueue, &battery->monitor_work, 0);
 }
 
+/* KiroOS: the battery's learned capacity lives in the fuel gauge driver (max77843_fuelgauge.c,
+ * kiro_*); these stand in on a model without it */
+int __weak kiro_batt_cap_get(void)
+{
+	return 0;
+}
+
+int __weak kiro_batt_cap_set(int mah)
+{
+	return -ENODEV;
+}
+
 /* KiroOS slow charging from 80% (read by the chargers): 0 = no limit */
 #define KIRO_SLOW_CHARGE_80_MA	900
 #define KIRO_SLOW_CHARGE_90_MA	600
@@ -4072,6 +4085,10 @@ ssize_t sec_bat_show_attrs(struct device *dev,
 		i += scnprintf(buf + i, PAGE_SIZE - i, "%d\n",
 			battery->kiro_charge);
 		break;
+	case BATT_KIRO_CAP:
+		i += scnprintf(buf + i, PAGE_SIZE - i, "%d\n",
+			kiro_batt_cap_get());
+		break;
 	case UPDATE:
 		break;
 	case TEST_MODE:
@@ -4827,6 +4844,11 @@ ssize_t sec_bat_store_attrs(
 					&battery->monitor_work, 0);
 			ret = count;
 		}
+		break;
+	case BATT_KIRO_CAP:
+		/* the saved capacity given back at boot (persist.sys.kiroos.batt_cap) */
+		if (sscanf(buf, "%d\n", &x) == 1 && kiro_batt_cap_set(x) == 0)
+			ret = count;
 		break;
 	case STORE_MODE:
 		if (sscanf(buf, "%d\n", &x) == 1) {

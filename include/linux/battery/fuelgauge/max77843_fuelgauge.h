@@ -199,6 +199,16 @@ struct max77843_fuelgauge_data {
 
 	unsigned int low_temp_limit;
 	unsigned int low_temp_recovery;
+
+	/* KiroOS Beta 3: the battery's real capacity, learned when it runs empty after a full
+	 * charge (see kiro_* in max77843_fuelgauge.c) */
+	int kiro_cap;		/* mAh, 0 = not learned yet */
+	bool kiro_full_seen;	/* charged to full since the last learning */
+	int kiro_low_cnt;	/* polls with the averaged voltage under 3.4 V at <= 10% */
 };
+
+/* sysfs battery/batt_kiro_cap (sec_battery.c) */
+int kiro_batt_cap_get(void);
+int kiro_batt_cap_set(int mah);
 
 #endif /* __MAX77843_FUELGAUGE_H */

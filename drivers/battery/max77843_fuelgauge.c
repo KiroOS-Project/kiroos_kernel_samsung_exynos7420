@@ -1053,6 +1053,91 @@ void max77843_prevent_early_poweroff(struct max77843_fuelgauge_data *fuelgauge,
 	}
 }
 
+/*
+ * KiroOS Beta 3: the battery's real capacity.
+ *
+ * The gauge counts the charge against FullCapRep, which stays near the design capacity
+ * (2588 mAh) when it never learned the battery (Cycles 0). An aged battery holds less: the
+ * reported charge then runs ahead of the real one ("58%" when it is nearly empty), and the
+ * low battery compensation below corrects it in one jump to 1% when the voltage gives it away:
+ * the phone switched off at 58% and woke up at 10%.
+ *
+ * When that happens after a full charge, the charge used since the full charge (the gauge's
+ * coulomb count, which is accurate; only its full capacity is wrong) is the battery's real
+ * capacity. It is kept here (sysfs battery/batt_kiro_cap; KiroOS saves it in
+ * persist.sys.kiroos.batt_cap and gives it back at boot) and the reported charge is never above
+ * what that capacity leaves, so it goes down evenly to 0% instead of jumping.
+ */
+static struct max77843_fuelgauge_data *kiro_fg;
+
+int kiro_batt_cap_get(void)
+{
+	return kiro_fg ? kiro_fg->kiro_cap : 0;
+}
+
+int kiro_batt_cap_set(int mah)
+{
+	int design;
+
+	if (!kiro_fg)
+		return -ENODEV;
+	design = kiro_fg->battery_data->Capacity / 2;
+	if (mah != 0 && (mah < design * 40 / 100 || mah > design))
+		return -EINVAL;
+	kiro_fg->kiro_cap = mah;
+	pr_info("%s: KiroOS battery capacity %d mAh (design %d)\n", __func__, mah, design);
+	return 0;
+}
+
+static void kiro_track_full(struct max77843_fuelgauge_data *fuelgauge, int soc, int status)
+{
+	/* soc in 0.1% */
+	if (status == POWER_SUPPLY_STATUS_FULL || soc >= 995)
+		fuelgauge->kiro_full_seen = true;
+}
+
+/* called when the voltage says empty, before the compensation rewrites RemCapRep */
+static void kiro_learn_capacity(struct max77843_fuelgauge_data *fuelgauge, int fg_soc,
+		int vcell, int current_now)
+{
+	int design = fuelgauge->battery_data->Capacity / 2;
+	int full = max77843_fg_read_fullcaprep(fuelgauge);
+	int rep = max77843_fg_read_repcap(fuelgauge);
+	int used = full - rep;
+
+	pr_info("%s: empty by voltage at soc %d.%d%% (vcell %d mV, %d mA): used %d mAh of %d since %s\n",
+		__func__, fg_soc / 10, fg_soc % 10, vcell, current_now, used, full,
+		fuelgauge->kiro_full_seen ? "a full charge" : "boot (no full charge seen)");
+	if (!fuelgauge->kiro_full_seen || full <= 0 || rep < 0)
+		return;
+	if (used < design * 40 / 100)
+		return;		/* too little to be the capacity (cold battery, very heavy load) */
+	if (used > design)
+		used = design;
+	fuelgauge->kiro_cap = used;
+	fuelgauge->kiro_full_seen = false;
+	pr_info("%s: KiroOS battery capacity learned: %d mAh (design %d)\n", __func__, used, design);
+}
+
+/* the charge left on the learned capacity, 0.1% (or -1 when nothing was learned) */
+static int kiro_capacity_soc(struct max77843_fuelgauge_data *fuelgauge)
+{
+	int full, rep, soc;
+
+	if (fuelgauge->kiro_cap <= 0)
+		return -1;
+	full = max77843_fg_read_fullcaprep(fuelgauge);
+	rep = max77843_fg_read_repcap(fuelgauge);
+	if (full <= 0 || rep < 0)
+		return -1;
+	soc = 1000 - (full - rep) * 1000 / fuelgauge->kiro_cap;
+	if (soc < 0)
+		soc = 0;
+	if (soc > 1000)
+		soc = 1000;
+	return soc;
+}
+
 void max77843_reset_low_batt_comp_cnt(struct max77843_fuelgauge_data *fuelgauge)
 {
 	memset(fuelgauge->info.low_batt_comp_cnt, 0,
@@ -1130,6 +1215,7 @@ int max77843_low_batt_compensation(struct max77843_fuelgauge_data *fuelgauge,
 		}
 
 		if (max77843_check_low_batt_comp_condition(fuelgauge, &new_level)) {
+			kiro_learn_capacity(fuelgauge, fg_soc, fg_vcell, fg_min_current);
 			max77843_fg_low_batt_compensation(fuelgauge, new_level);
 			max77843_reset_low_batt_comp_cnt(fuelgauge);
 
@@ -1194,6 +1280,15 @@ static int max77843_get_fuelgauge_soc(struct max77843_fuelgauge_data *fuelgauge)
 	psy_do_property("battery", get,
 		POWER_SUPPLY_PROP_STATUS, value);
 
+	/* KiroOS: never above what the learned capacity leaves (see kiro_learn_capacity) */
+	kiro_track_full(fuelgauge, fg_soc, value.intval);
+	{
+		int kiro_soc = kiro_capacity_soc(fuelgauge);
+
+		if (kiro_soc >= 0 && kiro_soc < fg_soc)
+			fg_soc = kiro_soc;
+	}
+
 	/*  Checks vcell level and tries to compensate SOC if needed.*/
 	/*  If jig cable is connected, then skip low batt compensation check. */
 	if (fuelgauge->pdata->check_jig_status &&
@@ -1205,8 +1300,20 @@ static int max77843_get_fuelgauge_soc(struct max77843_fuelgauge_data *fuelgauge)
 	if (fuelgauge->info.is_first_check)
 		fuelgauge->info.is_first_check = false;
 
-	if ((fg_vcell < 3400) && (avg_current < 0) && (fg_soc <= 10))
-		fg_soc = 0;
+	/* At 1.0% or less and under 3.4 V: empty. KiroOS Beta 3: on the averaged voltage too and
+	 * for three polls in a row (about a minute and a half), not on one sample of a load peak. */
+	if ((avg_current < 0) && (fg_soc <= 10)) {
+		int avg_vcell = max77843_fg_read_avg_vcell(fuelgauge);
+
+		if (fg_vcell < 3400 && avg_vcell < 3400) {
+			if (++fuelgauge->kiro_low_cnt >= 3)
+				fg_soc = 0;
+		} else {
+			fuelgauge->kiro_low_cnt = 0;
+		}
+	} else {
+		fuelgauge->kiro_low_cnt = 0;
+	}
 
 	fuelgauge->info.soc = fg_soc;
 
@@ -2415,6 +2522,11 @@ static int __devinit max77843_fuelgauge_probe(struct platform_device *pdev)
 	fuelgauge->initial_update_of_soc = true;
 	fuelgauge->low_temp_compensation_en = false;
 	fuelgauge->sw_v_empty = MAX77843_NORMAL_MODE;
+	/* KiroOS: nothing learned until userspace gives the saved capacity back */
+	fuelgauge->kiro_cap = 0;
+	fuelgauge->kiro_full_seen = false;
+	fuelgauge->kiro_low_cnt = 0;
+	kiro_fg = fuelgauge;
 
 	pr_info("%s: MAX77843 Fuelgauge Driver Loaded\n", __func__);
 	return 0;
