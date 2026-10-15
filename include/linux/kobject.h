@@ -28,8 +28,11 @@
 #include <linux/atomic.h>
 
 #define UEVENT_HELPER_PATH_LEN		256
-#define UEVENT_NUM_ENVP			32	/* number of env pointers */
-#define UEVENT_BUFFER_SIZE		2048	/* buffer for the variables */
+/* KiroOS Beta 4: 64 / 4096 (as upstream later did): Samsung's battery power supply already
+ * sent ~30 properties, and with cycle_count, charge_full(_design) and charge_counter its
+ * uevent ran out of room ("add_uevent_var: too many keys") and was dropped */
+#define UEVENT_NUM_ENVP			64	/* number of env pointers */
+#define UEVENT_BUFFER_SIZE		4096	/* buffer for the variables */
 
 /* path to the userspace helper executed on an event */
 extern char uevent_helper[];

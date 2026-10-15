@@ -692,6 +692,50 @@ KBUILD_CFLAGS += $(call cc-option,-Wdeclaration-after-statement,)
 # disable pointer signed / unsigned warnings in gcc 4.0
 KBUILD_CFLAGS += $(call cc-disable-warning, pointer-sign)
 
+# KiroOS Beta 4: building with GCC 8. These warning classes came after this 3.10 code was
+# written (GCC 6-8) and -Werror turned them into errors; upstream stable kernels disable the
+# same ones. cc-disable-warning only adds a flag the compiler knows: GCC 4.9 is unchanged.
+# GCC 5+ defaults to gnu11, whose inline rules this code predates: gnu89, as upstream does
+# (and GCC 4.9's own default).
+KBUILD_CFLAGS += $(call cc-option,-std=gnu89)
+KBUILD_CFLAGS += $(call cc-disable-warning, unused-const-variable)
+KBUILD_CFLAGS += $(call cc-disable-warning, misleading-indentation)
+KBUILD_CFLAGS += $(call cc-disable-warning, tautological-compare)
+KBUILD_CFLAGS += $(call cc-disable-warning, duplicate-decl-specifier)
+KBUILD_CFLAGS += $(call cc-disable-warning, int-in-bool-context)
+KBUILD_CFLAGS += $(call cc-disable-warning, memset-elt-size)
+KBUILD_CFLAGS += $(call cc-disable-warning, bool-operation)
+KBUILD_CFLAGS += $(call cc-disable-warning, switch-unreachable)
+KBUILD_CFLAGS += $(call cc-disable-warning, format-overflow)
+KBUILD_CFLAGS += $(call cc-disable-warning, format-truncation)
+KBUILD_CFLAGS += $(call cc-disable-warning, stringop-overflow)
+KBUILD_CFLAGS += $(call cc-disable-warning, stringop-truncation)
+KBUILD_CFLAGS += $(call cc-disable-warning, attribute-alias)
+KBUILD_CFLAGS += $(call cc-disable-warning, packed-not-aligned)
+KBUILD_CFLAGS += $(call cc-disable-warning, sizeof-pointer-memaccess)
+KBUILD_CFLAGS += $(call cc-disable-warning, array-bounds)
+KBUILD_CFLAGS += $(call cc-disable-warning, logical-not-parentheses)
+KBUILD_CFLAGS += $(call cc-disable-warning, parentheses)
+KBUILD_CFLAGS += $(call cc-disable-warning, implicit-fallthrough)
+KBUILD_CFLAGS += $(call cc-disable-warning, restrict)
+KBUILD_CFLAGS += $(call cc-disable-warning, nonnull)
+KBUILD_CFLAGS += $(call cc-disable-warning, address)
+KBUILD_CFLAGS += $(call cc-disable-warning, discarded-array-qualifiers)
+KBUILD_CFLAGS += $(call cc-disable-warning, shift-overflow)
+KBUILD_CFLAGS += $(call cc-disable-warning, frame-address)
+KBUILD_CFLAGS += $(call cc-disable-warning, unused-variable)
+KBUILD_CFLAGS += $(call cc-disable-warning, unused-function)
+KBUILD_CFLAGS += $(call cc-disable-warning, maybe-uninitialized)
+KBUILD_CFLAGS += $(call cc-disable-warning, switch-bool)
+KBUILD_CFLAGS += $(call cc-disable-warning, bool-compare)
+KBUILD_CFLAGS += $(call cc-disable-warning, multistatement-macros)
+KBUILD_CFLAGS += $(call cc-disable-warning, sizeof-array-argument)
+KBUILD_CFLAGS += $(call cc-disable-warning, missing-attributes)
+KBUILD_CFLAGS += $(call cc-disable-warning, cast-function-type)
+KBUILD_CFLAGS += $(call cc-disable-warning, enum-compare)
+KBUILD_CFLAGS += $(call cc-disable-warning, unused-label)
+KBUILD_CFLAGS += $(call cc-disable-warning, return-local-addr)
+
 # disable invalid "can't wrap" optimizations for signed / pointers
 KBUILD_CFLAGS	+= $(call cc-option,-fno-strict-overflow)
 
