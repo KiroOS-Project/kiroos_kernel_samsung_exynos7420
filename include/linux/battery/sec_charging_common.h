@@ -72,6 +72,10 @@ enum sec_battery_capacity_mode {
 	SEC_BATTERY_CAPACITY_CYCLE,
 	/* full capacity rep */
 	SEC_BATTERY_CAPACITY_FULL,
+	/* KiroOS: the battery's design capacity, in mAh */
+	SEC_BATTERY_CAPACITY_KIRO_DESIGN,
+	/* KiroOS: what the battery holds now when full (learned when known), in mAh */
+	SEC_BATTERY_CAPACITY_KIRO_FULL,
 };
 
 #if defined(CONFIG_WIRELESS_FIRMWARE_UPDATE) || defined(CONFIG_WIRELESS_CHARGER_HIGH_VOLTAGE)

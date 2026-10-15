@@ -1879,7 +1879,18 @@ static int max77843_fg_get_property(struct power_supply *psy,
 		case SEC_BATTERY_CAPACITY_FULL:
 			val->intval = max77843_get_fuelgauge_value(fuelgauge,
 							  FG_FULLCAPREP);
-			break;		
+			break;
+		/* KiroOS: battery health for Android (charge_full / charge_full_design),
+		 * the registers count 0.5 mAh (10 mOhm sense resistor) */
+		case SEC_BATTERY_CAPACITY_KIRO_DESIGN:
+			val->intval = fuelgauge->battery_data->Capacity / 2;
+			break;
+		case SEC_BATTERY_CAPACITY_KIRO_FULL:
+			if (fuelgauge->kiro_cap > 0)
+				val->intval = fuelgauge->kiro_cap;
+			else
+				val->intval = max77843_fg_read_fullcaprep(fuelgauge);
+			break;
 		}
 		break;
 		/* SOC (%) */

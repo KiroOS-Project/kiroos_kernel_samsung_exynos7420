@@ -199,6 +199,10 @@ static enum power_supply_property sec_battery_props[] = {
 	POWER_SUPPLY_PROP_CHARGE_COUNTER_SHADOW,
 	POWER_SUPPLY_PROP_CHARGE_OTG_CONTROL,
 	POWER_SUPPLY_PROP_INPUT_CURRENT_MAX,
+	/* KiroOS: battery cycles and health (cycle_count, charge_full, charge_full_design) */
+	POWER_SUPPLY_PROP_CYCLE_COUNT,
+	POWER_SUPPLY_PROP_CHARGE_FULL,
+	POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN,
 };
 
 static enum power_supply_property sec_power_props[] = {
@@ -5994,6 +5998,44 @@ static int sec_bat_get_property(struct power_supply *psy,
 		break;
 	case POWER_SUPPLY_PROP_INPUT_CURRENT_MAX:
 		val->intval = battery->charging_mode;
+		break;
+	/*
+	 * KiroOS: the fuel gauge counts the cycles (in 1% steps) and knows the capacity, but
+	 * nothing showed them to Android (apps read cycle_count -1 and no health).
+	 */
+	case POWER_SUPPLY_PROP_CYCLE_COUNT:
+		value.intval = SEC_BATTERY_CAPACITY_CYCLE;
+		psy_do_property(battery->pdata->fuelgauge_name, get,
+				POWER_SUPPLY_PROP_ENERGY_NOW, value);
+		if (value.intval < 0)
+			return -ENODATA;
+		val->intval = value.intval / 100;
+		break;
+	case POWER_SUPPLY_PROP_CHARGE_FULL:
+	case POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN:
+		{
+			int design, full;
+
+			value.intval = SEC_BATTERY_CAPACITY_KIRO_DESIGN;
+			psy_do_property(battery->pdata->fuelgauge_name, get,
+					POWER_SUPPLY_PROP_ENERGY_NOW, value);
+			design = value.intval;
+			if (design <= 0)
+				return -ENODATA;
+			if (psp == POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN) {
+				val->intval = design * 1000;	/* uAh */
+				break;
+			}
+			value.intval = SEC_BATTERY_CAPACITY_KIRO_FULL;
+			psy_do_property(battery->pdata->fuelgauge_name, get,
+					POWER_SUPPLY_PROP_ENERGY_NOW, value);
+			full = value.intval;
+			if (full <= 0)
+				return -ENODATA;
+			if (full > design)
+				full = design;
+			val->intval = full * 1000;	/* uAh */
+		}
 		break;
 	default:
 		return -EINVAL;
