@@ -205,6 +205,7 @@ struct max77843_fuelgauge_data {
 	int kiro_cap;		/* mAh, 0 = not learned yet */
 	bool kiro_full_seen;	/* charged to full since the last learning */
 	int kiro_low_cnt;	/* polls with the averaged voltage under 3.4 V at <= 10% */
+	int kiro_dip_logged;	/* Beta 4: the % a load dip was last logged at */
 };
 
 /* sysfs battery/batt_kiro_cap (sec_battery.c) */

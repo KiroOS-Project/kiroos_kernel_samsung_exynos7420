@@ -1082,7 +1082,7 @@ int kiro_batt_cap_set(int mah)
 	if (!kiro_fg)
 		return -ENODEV;
 	design = kiro_fg->battery_data->Capacity / 2;
-	if (mah != 0 && (mah < design * 40 / 100 || mah > design))
+	if (mah != 0 && (mah < design * 70 / 100 || mah > design))   /* Beta 4: 70% (was 40%) */
 		return -EINVAL;
 	kiro_fg->kiro_cap = mah;
 	pr_info("%s: KiroOS battery capacity %d mAh (design %d)\n", __func__, mah, design);
@@ -1110,7 +1110,7 @@ static void kiro_learn_capacity(struct max77843_fuelgauge_data *fuelgauge, int f
 		fuelgauge->kiro_full_seen ? "a full charge" : "boot (no full charge seen)");
 	if (!fuelgauge->kiro_full_seen || full <= 0 || rep < 0)
 		return;
-	if (used < design * 40 / 100)
+	if (used < design * 70 / 100)   /* Beta 4: 70%, a smaller "capacity" was a false empty */
 		return;		/* too little to be the capacity (cold battery, very heavy load) */
 	if (used > design)
 		used = design;
@@ -1190,6 +1190,26 @@ int max77843_low_batt_compensation(struct max77843_fuelgauge_data *fuelgauge,
 
 	/* Not charging, Under low battery comp voltage */
 	if (fg_vcell <= fuelgauge->battery_data->low_battery_comp_voltage) {
+		/*
+		 * KiroOS Beta 4: a voltage dip under load is not an empty battery. An aged cell
+		 * (high internal resistance) under a heavy load (games, the camera, a build) falls
+		 * below the threshold at 50%; the compensation then rewrote the charge to 1% and the
+		 * phone shut down ("50% -> 1%"). The gauge's voltage SOC (VFSOC, from its open
+		 * circuit voltage estimate, which takes the load out) tells a dip from the real
+		 * end: above 15% it is a dip, nothing is touched (and nothing is learned).
+		 */
+		const int vfsoc = max77843_fg_read_vfsoc(fuelgauge);
+
+		if (vfsoc > 150) {
+			if (fuelgauge->kiro_dip_logged != fg_soc / 100) {
+				fuelgauge->kiro_dip_logged = fg_soc / 100;
+				pr_info("%s: KiroOS: %d mV at %d.%d%% is a load dip (VFSOC %d.%d%%), no compensation\n",
+					__func__, fg_vcell, fg_soc / 10, fg_soc % 10,
+					vfsoc / 10, vfsoc % 10);
+			}
+			max77843_reset_low_batt_comp_cnt(fuelgauge);
+			goto out;
+		}
 		fg_avg_current = max77843_fg_read_avg_current(fuelgauge,
 			SEC_BATTERY_CURRENT_MA);
 		fg_min_current = min(fg_avg_current, fg_current);
@@ -1228,6 +1248,7 @@ int max77843_low_batt_compensation(struct max77843_fuelgauge_data *fuelgauge,
 		}
 	}
 
+out:
 	/* Prevent power off over 3500mV */
 	max77843_prevent_early_poweroff(fuelgauge, fg_vcell, &fg_soc);
 

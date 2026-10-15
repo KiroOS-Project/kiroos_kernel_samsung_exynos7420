@@ -1082,6 +1082,13 @@ int max77833_low_batt_compensation(struct max77833_fuelgauge_data *fuelgauge,
 
 	/* Not charging, Under low battery comp voltage */
 	if (fg_vcell <= fuelgauge->battery_data->low_battery_comp_voltage) {
+		/* KiroOS Beta 4: a voltage dip under load is not an empty battery (the voltage
+		 * SOC, from the gauge's load-free voltage estimate, says above 15%): no jump to
+		 * 1%, see max77843_low_batt_compensation */
+		if (max77833_fg_read_vfsoc(fuelgauge) > 150) {
+			max77833_reset_low_batt_comp_cnt(fuelgauge);
+			goto out;
+		}
 		fg_avg_current = max77833_fg_read_avg_current(fuelgauge,
 			SEC_BATTERY_CURRENT_MA);
 		fg_min_current = min(fg_avg_current, fg_current);
@@ -1119,6 +1126,7 @@ int max77833_low_batt_compensation(struct max77833_fuelgauge_data *fuelgauge,
 		}
 	}
 
+out:
 	/* Prevent power off over 3500mV */
 	max77833_prevent_early_poweroff(fuelgauge, fg_vcell, &fg_soc);
 
