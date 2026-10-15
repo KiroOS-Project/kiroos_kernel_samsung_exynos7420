@@ -78,6 +78,7 @@ static struct device_attribute sec_battery_attrs[] = {
 	SEC_BATTERY_ATTR(store_mode),
 	SEC_BATTERY_ATTR(batt_kiro_charge),
 	SEC_BATTERY_ATTR(batt_kiro_cap),
+	SEC_BATTERY_ATTR(batt_kiro_cycle),
 	SEC_BATTERY_ATTR(update),
 	SEC_BATTERY_ATTR(test_mode),
 
@@ -204,6 +205,8 @@ static enum power_supply_property sec_battery_props[] = {
 	POWER_SUPPLY_PROP_CHARGE_FULL,
 	POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN,
 };
+
+static void kiro_count_cycles(struct sec_battery_info *battery);
 
 static enum power_supply_property sec_power_props[] = {
 	POWER_SUPPLY_PROP_ONLINE,
@@ -2704,6 +2707,7 @@ static void sec_bat_get_battery_info(
 #else
 	battery->capacity = value.intval;
 #endif
+	kiro_count_cycles(battery);
 
 	if (battery->capacity > 5 && battery->ignore_siop &&
 	    (battery->r_siop_level != battery->siop_level)) {
@@ -3290,6 +3294,27 @@ int __weak kiro_batt_cap_get(void)
 int __weak kiro_batt_cap_set(int mah)
 {
 	return -ENODEV;
+}
+
+/*
+ * KiroOS Beta 4: battery cycles. The fuel gauge's Cycles register only counts since the battery
+ * was last disconnected from it, and on stock Samsung kept the count in /efs; here every 1% the
+ * charge goes down while not charging is counted (100% used = one cycle, the usual definition),
+ * kept in persist.sys.kiroos.batt_cycle by kiroos_perf.sh and given back at every boot.
+ * A drop of more than 20% between two readings is not real use (a gauge correction).
+ */
+static void kiro_count_cycles(struct sec_battery_info *battery)
+{
+	int soc = battery->capacity;
+	int last = battery->kiro_cycle_last_soc;
+
+	battery->kiro_cycle_last_soc = soc;
+	if (last < 0 || soc >= last || last - soc > 20)
+		return;
+	if (battery->status == POWER_SUPPLY_STATUS_CHARGING ||
+	    battery->status == POWER_SUPPLY_STATUS_FULL)
+		return;
+	battery->kiro_cycle_pct += last - soc;
 }
 
 /* KiroOS slow charging from 80% (read by the chargers): 0 = no limit */
@@ -4093,6 +4118,10 @@ ssize_t sec_bat_show_attrs(struct device *dev,
 		i += scnprintf(buf + i, PAGE_SIZE - i, "%d\n",
 			kiro_batt_cap_get());
 		break;
+	case BATT_KIRO_CYCLE:
+		i += scnprintf(buf + i, PAGE_SIZE - i, "%d\n",
+			battery->kiro_cycle_pct);
+		break;
 	case UPDATE:
 		break;
 	case TEST_MODE:
@@ -4853,6 +4882,15 @@ ssize_t sec_bat_store_attrs(
 		/* the saved capacity given back at boot (persist.sys.kiroos.batt_cap) */
 		if (sscanf(buf, "%d\n", &x) == 1 && kiro_batt_cap_set(x) == 0)
 			ret = count;
+		break;
+	case BATT_KIRO_CYCLE:
+		/* the saved count given back at boot (persist.sys.kiroos.batt_cycle); what was
+		 * counted since boot is kept on top of it */
+		if (sscanf(buf, "%d\n", &x) == 1 && x >= 0 && x < 100000000) {
+			if (x > battery->kiro_cycle_pct)
+				battery->kiro_cycle_pct = x;
+			ret = count;
+		}
 		break;
 	case STORE_MODE:
 		if (sscanf(buf, "%d\n", &x) == 1) {
@@ -6000,16 +6038,15 @@ static int sec_bat_get_property(struct power_supply *psy,
 		val->intval = battery->charging_mode;
 		break;
 	/*
-	 * KiroOS: the fuel gauge counts the cycles (in 1% steps) and knows the capacity, but
-	 * nothing showed them to Android (apps read cycle_count -1 and no health).
+	 * KiroOS: the cycles and the capacity were never shown to Android (apps read
+	 * cycle_count -1 and no health). Cycles: KiroOS's own count (kiro_count_cycles), or
+	 * the fuel gauge's (in 1% steps, only since the battery was last disconnected) when higher.
 	 */
 	case POWER_SUPPLY_PROP_CYCLE_COUNT:
 		value.intval = SEC_BATTERY_CAPACITY_CYCLE;
 		psy_do_property(battery->pdata->fuelgauge_name, get,
 				POWER_SUPPLY_PROP_ENERGY_NOW, value);
-		if (value.intval < 0)
-			return -ENODATA;
-		val->intval = value.intval / 100;
+		val->intval = max(value.intval, battery->kiro_cycle_pct) / 100;
 		break;
 	case POWER_SUPPLY_PROP_CHARGE_FULL:
 	case POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN:
@@ -7802,6 +7839,8 @@ static int __devinit sec_battery_probe(struct platform_device *pdev)
 	battery->ignore_siop = false;
 
 	battery->batt_cycle = -1;
+	battery->kiro_cycle_pct = 0;
+	battery->kiro_cycle_last_soc = -1;
 #if defined(CONFIG_BATTERY_AGE_FORECAST)
 	battery->pdata->age_step = 0;
 #endif

@@ -236,6 +236,10 @@ struct sec_battery_info {
 	/* KiroOS: 0 normal, 1 hold between 77% and 80%, 2 bypass (the charger powers the
 	 * phone, the battery is not charged); the cable and USB stay connected */
 	int kiro_charge;
+	/* KiroOS Beta 4: the battery's cycles, counted in % used (100 = one cycle; saved in
+	 * persist.sys.kiroos.batt_cycle and given back at boot) and the last charge seen */
+	int kiro_cycle_pct;
+	int kiro_cycle_last_soc;
 	bool kiro_holding;
 	bool ignore_store_mode;
 	bool slate_mode;
@@ -369,6 +373,7 @@ enum {
 	STORE_MODE,
 	BATT_KIRO_CHARGE,
 	BATT_KIRO_CAP,
+	BATT_KIRO_CYCLE,
 	UPDATE,
 	TEST_MODE,
 
