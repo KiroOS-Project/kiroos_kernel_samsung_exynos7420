@@ -384,7 +384,16 @@ static void __init set_volt_table_CA57(void)
 	case 5 :
 		max_support_idx_CA57 = L10; break;	/* 1.5GHz */
 	default :
-		max_support_idx_CA57 = L4;		/* 2.1GHz */
+		/*
+		 * KiroOS Beta 4: a light overclock, 2.2 GHz (the PLL steps 100 MHz, so 2.15 is
+		 * not a step; 2.2 is the next), only on a chip whose fused ASV table has its own
+		 * voltage for it, so it runs at the voltage Samsung measured for this very die;
+		 * else the stock 2.1 GHz. IPA and the thermal limits still throttle from the top.
+		 */
+		if (get_match_volt(ID_CL1, exynos7420_freq_table_CA57[L3].frequency))
+			max_support_idx_CA57 = L3;	/* 2.2GHz */
+		else
+			max_support_idx_CA57 = L4;	/* 2.1GHz */
 	}
 #else
 	max_support_idx_CA57 = L13;	/* 1.2 GHz */

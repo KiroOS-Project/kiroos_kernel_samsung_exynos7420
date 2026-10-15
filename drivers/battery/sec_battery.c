@@ -3362,10 +3362,16 @@ static int kiro_full_mah(struct sec_battery_info *battery)
 	return min(value.intval, design);
 }
 
-/* KiroOS slow charging from 80% (read by the chargers): 0 = no limit */
+/* KiroOS slow charging from 80% (read by the chargers): 0 = no limit. Beta 4: a cool battery
+ * keeps a faster pace (the slow pace was there for heat); warm from 36 C, cool again at 33 C */
 #define KIRO_SLOW_CHARGE_80_MA	900
 #define KIRO_SLOW_CHARGE_90_MA	600
+#define KIRO_COOL_CHARGE_80_MA	1400
+#define KIRO_COOL_CHARGE_90_MA	900
+#define KIRO_WARM_ON		360	/* 0.1 C */
+#define KIRO_WARM_OFF		330
 int kiro_charge_limit_ma;
+static bool kiro_charge_warm;
 
 static void sec_bat_monitor_work(
 				struct work_struct *work)
@@ -3570,18 +3576,23 @@ continue_monitor:
 	if (!battery->store_mode) {
 		int limit = 0;
 
+		if (battery->temperature >= KIRO_WARM_ON)
+			kiro_charge_warm = true;
+		else if (battery->temperature <= KIRO_WARM_OFF)
+			kiro_charge_warm = false;
 		if (is_wired_type(battery->cable_type) && battery->kiro_charge == 0) {
 			if (battery->capacity >= 90)
-				limit = KIRO_SLOW_CHARGE_90_MA;
+				limit = kiro_charge_warm ? KIRO_SLOW_CHARGE_90_MA : KIRO_COOL_CHARGE_90_MA;
 			else if (battery->capacity >= 80)
-				limit = KIRO_SLOW_CHARGE_80_MA;
+				limit = kiro_charge_warm ? KIRO_SLOW_CHARGE_80_MA : KIRO_COOL_CHARGE_80_MA;
 		}
 		if (limit != kiro_charge_limit_ma) {
 			union power_supply_propval v;
 
 			kiro_charge_limit_ma = limit;
-			dev_info(battery->dev, "%s: kiro slow charge %d mA at %d%%\n",
-				__func__, limit, battery->capacity);
+			dev_info(battery->dev, "%s: kiro slow charge %d mA at %d%% (%d.%d C)\n",
+				__func__, limit, battery->capacity,
+				battery->temperature / 10, battery->temperature % 10);
 			/* the charger sets its current again, with the limit */
 			v.intval = battery->siop_level;
 			psy_do_property(battery->pdata->charger_name, set,
