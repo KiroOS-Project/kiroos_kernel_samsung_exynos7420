@@ -200,13 +200,18 @@ static enum power_supply_property sec_battery_props[] = {
 	POWER_SUPPLY_PROP_CHARGE_COUNTER_SHADOW,
 	POWER_SUPPLY_PROP_CHARGE_OTG_CONTROL,
 	POWER_SUPPLY_PROP_INPUT_CURRENT_MAX,
-	/* KiroOS: battery cycles and health (cycle_count, charge_full, charge_full_design) */
+	/* KiroOS: battery cycles and health (cycle_count, charge_full, charge_full_design,
+	 * charge_counter) */
 	POWER_SUPPLY_PROP_CYCLE_COUNT,
 	POWER_SUPPLY_PROP_CHARGE_FULL,
 	POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN,
+	POWER_SUPPLY_PROP_CHARGE_COUNTER,
 };
 
 static void kiro_count_cycles(struct sec_battery_info *battery);
+static int kiro_cycles(struct sec_battery_info *battery);
+static int kiro_full_mah(struct sec_battery_info *battery);
+static int kiro_design_mah(struct sec_battery_info *battery);
 
 static enum power_supply_property sec_power_props[] = {
 	POWER_SUPPLY_PROP_ONLINE,
@@ -3317,6 +3322,46 @@ static void kiro_count_cycles(struct sec_battery_info *battery)
 	battery->kiro_cycle_pct += last - soc;
 }
 
+/* the cycles: KiroOS's own count, or the fuel gauge's (1% steps, only since the battery was
+ * last disconnected) when higher */
+static int kiro_cycles(struct sec_battery_info *battery)
+{
+	union power_supply_propval value;
+
+	value.intval = SEC_BATTERY_CAPACITY_CYCLE;
+	psy_do_property(battery->pdata->fuelgauge_name, get,
+			POWER_SUPPLY_PROP_ENERGY_NOW, value);
+	return max(value.intval, battery->kiro_cycle_pct) / 100;
+}
+
+/* the design capacity in mAh (each fuel gauge driver in its own units), or 0 */
+static int kiro_design_mah(struct sec_battery_info *battery)
+{
+	union power_supply_propval value;
+
+	value.intval = SEC_BATTERY_CAPACITY_KIRO_DESIGN;
+	psy_do_property(battery->pdata->fuelgauge_name, get,
+			POWER_SUPPLY_PROP_ENERGY_NOW, value);
+	return value.intval;
+}
+
+/* what the battery holds when full, in mAh (learned capacity or FullCapRep, never above the
+ * design capacity), or 0 */
+static int kiro_full_mah(struct sec_battery_info *battery)
+{
+	union power_supply_propval value;
+	int design = kiro_design_mah(battery);
+
+	if (design <= 0)
+		return 0;
+	value.intval = SEC_BATTERY_CAPACITY_KIRO_FULL;
+	psy_do_property(battery->pdata->fuelgauge_name, get,
+			POWER_SUPPLY_PROP_ENERGY_NOW, value);
+	if (value.intval <= 0)
+		return 0;
+	return min(value.intval, design);
+}
+
 /* KiroOS slow charging from 80% (read by the chargers): 0 = no limit */
 #define KIRO_SLOW_CHARGE_80_MA	900
 #define KIRO_SLOW_CHARGE_90_MA	600
@@ -4321,7 +4366,10 @@ ssize_t sec_bat_show_attrs(struct device *dev,
 		i += scnprintf(buf + i, PAGE_SIZE - i, "%d\n", value.intval);
 		break;
 	case BATTERY_CYCLE:
-		i += scnprintf(buf + i, PAGE_SIZE - i, "%d\n", battery->batt_cycle);
+		/* KiroOS: apps read this Samsung node first (DevCheck); nothing writes it here
+		 * (stock kept it in /efs), so KiroOS's count instead of -1 */
+		i += scnprintf(buf + i, PAGE_SIZE - i, "%d\n",
+			battery->batt_cycle >= 0 ? battery->batt_cycle : kiro_cycles(battery));
 		break;
 #if defined(CONFIG_WIRELESS_CHARGER_THM)
 	case BATT_WPC_TEMP:
@@ -6039,39 +6087,38 @@ static int sec_bat_get_property(struct power_supply *psy,
 		break;
 	/*
 	 * KiroOS: the cycles and the capacity were never shown to Android (apps read
-	 * cycle_count -1 and no health). Cycles: KiroOS's own count (kiro_count_cycles), or
-	 * the fuel gauge's (in 1% steps, only since the battery was last disconnected) when higher.
+	 * cycle_count -1 and no health), see kiro_cycles() and kiro_full_mah().
 	 */
 	case POWER_SUPPLY_PROP_CYCLE_COUNT:
-		value.intval = SEC_BATTERY_CAPACITY_CYCLE;
-		psy_do_property(battery->pdata->fuelgauge_name, get,
-				POWER_SUPPLY_PROP_ENERGY_NOW, value);
-		val->intval = max(value.intval, battery->kiro_cycle_pct) / 100;
+		val->intval = kiro_cycles(battery);
 		break;
-	case POWER_SUPPLY_PROP_CHARGE_FULL:
 	case POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN:
 		{
-			int design, full;
+			int design = kiro_design_mah(battery);
 
-			value.intval = SEC_BATTERY_CAPACITY_KIRO_DESIGN;
-			psy_do_property(battery->pdata->fuelgauge_name, get,
-					POWER_SUPPLY_PROP_ENERGY_NOW, value);
-			design = value.intval;
 			if (design <= 0)
 				return -ENODATA;
-			if (psp == POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN) {
-				val->intval = design * 1000;	/* uAh */
-				break;
-			}
-			value.intval = SEC_BATTERY_CAPACITY_KIRO_FULL;
-			psy_do_property(battery->pdata->fuelgauge_name, get,
-					POWER_SUPPLY_PROP_ENERGY_NOW, value);
-			full = value.intval;
+			val->intval = design * 1000;	/* uAh */
+		}
+		break;
+	case POWER_SUPPLY_PROP_CHARGE_FULL:
+		{
+			int full = kiro_full_mah(battery);
+
 			if (full <= 0)
 				return -ENODATA;
-			if (full > design)
-				full = design;
 			val->intval = full * 1000;	/* uAh */
+		}
+		break;
+	/* the charge left, in uAh (BatteryManager CHARGE_COUNTER): apps work out the battery's
+	 * health from it (DevCheck: charge counter / level against the design capacity) */
+	case POWER_SUPPLY_PROP_CHARGE_COUNTER:
+		{
+			int full = kiro_full_mah(battery);
+
+			if (full <= 0)
+				return -ENODATA;
+			val->intval = full * 10 * battery->capacity;	/* mAh * 1000 * % / 100 */
 		}
 		break;
 	default:
